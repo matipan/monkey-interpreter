@@ -73,6 +73,7 @@ pub const TokenType = enum {
             .ifCond => return "if",
             .elseCond => return "else",
             .returnWith => return "return",
+            .ident => return "ident",
             else => return "unknown",
         }
     }

@@ -24,14 +24,6 @@ pub const Statement = union(enum) {
     }
 };
 
-pub const ExpressionStatement = struct {
-    expression: Expression,
-
-    pub fn literal(self: ExpressionStatement) []const u8 {
-        return self.expression.literal();
-    }
-};
-
 pub const LetStatement = struct {
     name: Identifier,
     value: Expression,
@@ -49,12 +41,31 @@ pub const ReturnStatement = struct {
     }
 };
 
+pub const ExpressionStatement = struct {
+    expression: Expression,
+
+    pub fn literal(self: ExpressionStatement) []const u8 {
+        return self.expression.literal();
+    }
+};
+
 pub const Expression = union(enum) {
     identifier: Identifier,
+    integer_literal: IntegerLiteral,
 
     pub fn literal(self: Expression) []const u8 {
-        return self.identifier.token.literal;
+        switch (self) {
+            inline else => |case| return case.token.literal,
+        }
     }
+};
+
+pub const Identifier = struct {
+    token: Token,
+};
+
+pub const IntegerLiteral = struct {
+    token: Token,
 };
 
 pub const Program = struct {
@@ -69,8 +80,4 @@ pub const Program = struct {
     pub fn deinit(self: Program) void {
         return self.statements.deinit();
     }
-};
-
-pub const Identifier = struct {
-    token: Token,
 };

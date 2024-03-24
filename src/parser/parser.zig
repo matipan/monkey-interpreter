@@ -35,6 +35,8 @@ const Parser = struct {
             .current_token = Token{ .tokenType = tokenType.eof, .literal = "" },
             .peek_token = Token{ .tokenType = tokenType.eof, .literal = "" },
         };
+        // NOTE: we call nextToken twice so that current token and peek token
+        // are set to tokens from the program instead of EOF as defined above
         p.nextToken();
         p.nextToken();
         return p;
@@ -60,6 +62,9 @@ const Parser = struct {
                 else => try self.parseExpressionStatement(),
             };
 
+            // skip semicolon so that parser is ready for next stmt or expression
+            self.nextToken();
+
             // we only reach here once an actual statement has been initialized
             prog.statements.append(stmt) catch |err| {
                 std.debug.print("could not append statements: {any}\n", .{err});
@@ -73,6 +78,7 @@ const Parser = struct {
     fn prefixParseFn(tokType: tokenType) ParseError!*const fn (*Parser) ast.Expression {
         return switch (tokType) {
             .ident => Parser.parseIdentifier,
+            .int => Parser.parseIntegerLiteral,
             else => ParseError.InternalError,
         };
     }
@@ -80,7 +86,9 @@ const Parser = struct {
     fn parseExpressionStatement(self: *Parser) ParseError!ast.Statement {
         const exp = try self.parseExpression(Operator.lowest);
 
-        if (self.peek_token.tokenType == tokenType.semicolon) {
+        // skip until we find a semi colon so that the parsing is ready for
+        // the next statement
+        while (self.current_token.tokenType != tokenType.semicolon) {
             self.nextToken();
         }
 
@@ -98,10 +106,12 @@ const Parser = struct {
     }
 
     fn parseReturnStatement(self: *Parser) ParseError!ast.Statement {
-        // if the next token is either an identifier or a literal value
+        // TODO: how do we handle expression statements on return
+
+        // if the next token is not an identifier or a literal value
         // then this is an invalid return statement
         switch (self.peek_token.tokenType) {
-            .ident, tokenType.int, tokenType.boolTrue, tokenType.boolFalse => self.nextToken(),
+            .ident, .int, .boolTrue, .boolFalse => self.nextToken(),
             else => return ParseError.MissingIdentOrLiteral,
         }
 
@@ -114,9 +124,6 @@ const Parser = struct {
         while (self.current_token.tokenType != tokenType.semicolon) {
             self.nextToken();
         }
-
-        // skip semicolon so that parser is ready for next stmt or expression
-        self.nextToken();
 
         return ast.Statement{ .return_with = returnStmt };
     }
@@ -140,18 +147,15 @@ const Parser = struct {
             return ParseError.MissingAssign;
         }
 
+        // TODO: handle expression statements
         // now we just need to store the value of the let statement. We also
         // store the entire token. The value needs to be an expression stmt
-        // TODO: how will expressions be handled?
-        //
+
         // skip until we find a semi colon so that the parsing is ready for
         // the next statement
         while (self.current_token.tokenType != tokenType.semicolon) {
             self.nextToken();
         }
-
-        // skip semicolon so that parser is ready for next stmt or expression
-        self.nextToken();
 
         return ast.Statement{ .let = let };
     }
@@ -159,6 +163,7 @@ const Parser = struct {
     fn parsePrefix(self: *Parser, tokType: tokenType) ast.Expression {
         switch (tokType) {
             .identifier => return self.parseIdentifier(),
+            .int => return self.parseIntegerLiteral(),
             else => return ast.Expression{},
         }
     }
@@ -166,6 +171,14 @@ const Parser = struct {
     fn parseIdentifier(self: *Parser) ast.Expression {
         return ast.Expression{
             .identifier = ast.Identifier{
+                .token = self.current_token,
+            },
+        };
+    }
+
+    fn parseIntegerLiteral(self: *Parser) ast.Expression {
+        return ast.Expression{
+            .integer_literal = ast.IntegerLiteral{
                 .token = self.current_token,
             },
         };
@@ -214,7 +227,10 @@ test "identifier expressions" {
     const allocator = gpa.allocator();
 
     var p = Parser.init(Lexer.init("foobar;"));
-    const program = try p.parseProgram(allocator);
+    const program = p.parseProgram(allocator) catch |err| {
+        std.debug.print("parseProgram failed with = {any}\n", .{err});
+        return err;
+    };
 
     testing.expect(program.statements.items.len == 1) catch |err| {
         std.debug.print("{d} != 1\n", .{program.statements.items.len});
@@ -227,6 +243,35 @@ test "identifier expressions" {
         .expression => {
             try switch (stmt.expression.expression) {
                 .identifier => testing.expect(std.mem.eql(u8, "foobar", stmt.expression.literal())),
+                else => ParseError.InternalError,
+            };
+        },
+        else => ParseError.InternalError,
+    };
+}
+
+test "integer literal expressions" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    var p = Parser.init(Lexer.init("5;"));
+    const program = p.parseProgram(allocator) catch |err| {
+        std.debug.print("parseProgram failed with = {any}\n", .{err});
+        return err;
+    };
+
+    testing.expect(program.statements.items.len == 1) catch |err| {
+        std.debug.print("{d} != 1\n", .{program.statements.items.len});
+        return err;
+    };
+
+    const stmt: ast.Statement = program.statements.getLast();
+
+    return switch (stmt) {
+        .expression => {
+            try switch (stmt.expression.expression) {
+                .integer_literal => testing.expect(std.mem.eql(u8, "5", stmt.expression.literal())),
+                else => ParseError.InternalError,
             };
         },
         else => ParseError.InternalError,
