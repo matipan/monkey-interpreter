@@ -120,9 +120,10 @@ const Parser = struct {
         // get the next token and obtain the prefixParseFn of that one
         self.nextToken();
 
-        // if the expression can be parsed we return the complete PrefixExpression
-        // if it fails we return an empty expression
-        if (self.parseExpression(Operator.prefix)) |right| {
+        const parseFn = Parser.prefixParseFn(self.current_token.tokenType);
+        if (parseFn) |func| {
+            const right = func(self);
+
             return ast.Expression{
                 .prefix = ast.PrefixExpression{
                     .token = operator_token,
@@ -130,7 +131,8 @@ const Parser = struct {
                     .right = &right,
                 },
             };
-        } else |_| {
+        } else |err| {
+            _ = err;
             return ast.Expression{
                 .empty = ast.EmptyExpression{
                     .token = Token{
@@ -143,14 +145,9 @@ const Parser = struct {
     }
 
     fn parseExpression(self: *Parser, op: Operator) ParseError!ast.Expression {
+        _ = op;
         const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
-        const exp = parseFn(self);
-        if (op == Operator.prefix) {
-            std.debug.print("right expression literal = {s}\n", .{exp.prefix.right.literal()});
-        }
-
-        std.debug.print("expression literal = {s}\n", .{exp.literal()});
-        return exp;
+        return parseFn(self);
     }
 
     fn parseReturnStatement(self: *Parser) ParseError!ast.Statement {
