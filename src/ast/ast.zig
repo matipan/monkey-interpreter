@@ -50,8 +50,10 @@ pub const ExpressionStatement = struct {
 };
 
 pub const Expression = union(enum) {
+    empty: EmptyExpression,
     identifier: Identifier,
     integer_literal: IntegerLiteral,
+    prefix: PrefixExpression,
 
     pub fn literal(self: Expression) []const u8 {
         switch (self) {
@@ -60,12 +62,23 @@ pub const Expression = union(enum) {
     }
 };
 
+pub const EmptyExpression = struct {
+    token: Token,
+};
+
 pub const Identifier = struct {
     token: Token,
 };
 
 pub const IntegerLiteral = struct {
     token: Token,
+};
+
+pub const PrefixExpression = struct {
+    // The prefix token itself (e.g. !)
+    token: Token,
+    operator: []const u8,
+    right: *Expression,
 };
 
 pub const Program = struct {
