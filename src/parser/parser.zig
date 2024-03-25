@@ -58,7 +58,9 @@ const Parser = struct {
             const stmt = switch (self.current_token.tokenType) {
                 .let => try self.parseLetStatement(),
                 .returnWith => try self.parseReturnStatement(),
-                else => try self.parseExpressionStatement(),
+                // receives a program that will be used to allocate expression
+                // on the heap that live in the context of the program
+                else => try self.parseExpressionStatement(&prog),
             };
 
             // skip semicolon so that parser is ready for next stmt or expression
@@ -72,82 +74,6 @@ const Parser = struct {
         }
 
         return prog;
-    }
-
-    fn prefixParseFn(tokType: tokenType) ParseError!*const fn (*Parser) ast.Expression {
-        return switch (tokType) {
-            .ident => Parser.parseIdentifier,
-            .int => Parser.parseIntegerLiteral,
-            .bang, .minus => Parser.parsePrefixExpression,
-            else => ParseError.InternalError,
-        };
-    }
-
-    fn parseExpressionStatement(self: *Parser) ParseError!ast.Statement {
-        const exp = try self.parseExpression(Operator.lowest);
-
-        // skip until we find a semi colon so that the parsing is ready for
-        // the next statement
-        while (self.current_token.tokenType != tokenType.semicolon) {
-            self.nextToken();
-        }
-
-        return ast.Statement{
-            .expression = ast.ExpressionStatement{
-                .expression = exp,
-            },
-        };
-    }
-
-    // TODO: need to think a bit better how we want to handle errors and such
-    // here. It seems that having the parsePrefixExpression function with dynamic
-    // dispatch using the same approach as the book plus error handling is getting
-    // a bit complicated. In the book we have a list of errors that get collected
-    // (and maybe eventually shown? Haven't checked), we are not doing that here
-    // we are just failing directly. If we want to have recursion and dynamic
-    // calling like the book, this function cannot return an error. However,
-    // with this latest refactor something is not quite working. We are getting
-    // an unreachable code exception somewhere. Maybe a missing error handling?
-    //
-    // NOTE: is empty expression below even getting called? the error in question
-    // happens in this line of the prefix test below:
-    // -- std.debug.print("{s} != {s}\n", .{ case.expectedLiteral, stmt.expression.expression.prefix.right.literal() });
-    fn parsePrefixExpression(self: *Parser) ast.Expression {
-        const operator_token = self.current_token;
-
-        // if we are in here then we've already identified that we are dealing
-        // with a prefix expression (e.g. '!5'). So we need to move over to
-        // get the next token and obtain the prefixParseFn of that one
-        self.nextToken();
-
-        const parseFn = Parser.prefixParseFn(self.current_token.tokenType);
-        if (parseFn) |func| {
-            const right = func(self);
-
-            return ast.Expression{
-                .prefix = ast.PrefixExpression{
-                    .token = operator_token,
-                    .operator = tokenType.string(operator_token.tokenType),
-                    .right = &right,
-                },
-            };
-        } else |err| {
-            _ = err;
-            return ast.Expression{
-                .empty = ast.EmptyExpression{
-                    .token = Token{
-                        .tokenType = tokenType.illegal,
-                        .literal = tokenType.string(tokenType.illegal),
-                    },
-                },
-            };
-        }
-    }
-
-    fn parseExpression(self: *Parser, op: Operator) ParseError!ast.Expression {
-        _ = op;
-        const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
-        return parseFn(self);
     }
 
     fn parseReturnStatement(self: *Parser) ParseError!ast.Statement {
@@ -205,7 +131,75 @@ const Parser = struct {
         return ast.Statement{ .let = let };
     }
 
-    fn parseIdentifier(self: *Parser) ast.Expression {
+    fn prefixParseFn(tokType: tokenType) ParseError!*const fn (*Parser, *ast.Program) ParseError!ast.Expression {
+        return switch (tokType) {
+            .ident => Parser.parseIdentifier,
+            .int => Parser.parseIntegerLiteral,
+            .bang, .minus => Parser.parsePrefixExpression,
+            else => ParseError.InternalError,
+        };
+    }
+
+    fn parseExpressionStatement(self: *Parser, program: *ast.Program) ParseError!ast.Statement {
+        const exp = try self.parseExpression(Operator.lowest, program);
+
+        // skip until we find a semi colon so that the parsing is ready for
+        // the next statement
+        while (self.current_token.tokenType != tokenType.semicolon) {
+            self.nextToken();
+        }
+
+        return ast.Statement{
+            .expression = ast.ExpressionStatement{
+                .expression = exp,
+            },
+        };
+    }
+
+    // NOTE: I'm not entirely sure if I'm handling allocations and such the right
+    // way. But I want to finish the book and maybe later learn a bit better
+    // how we could structure in a more native zig way. Right now it feels patched
+    // to make it work with how the Go version of the interpreter is written
+    fn parsePrefixExpression(self: *Parser, program: *ast.Program) ParseError!ast.Expression {
+        const operator_token = self.current_token;
+
+        // if we are in here then we've already identified that we are dealing
+        // with a prefix expression (e.g. '!5'). So we need to move over to
+        // get the next token and obtain the prefixParseFn of that one
+        self.nextToken();
+
+        const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
+        const right = try parseFn(self, program);
+
+        const right_ptr = program.alloc.create(ast.Expression) catch |err| {
+            std.debug.print("could not allocate expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+
+        program.expressions.append(right_ptr) catch |err| {
+            std.debug.print("could not append expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+
+        right_ptr.* = right;
+
+        return ast.Expression{
+            .prefix = ast.PrefixExpression{
+                .token = operator_token,
+                .operator = tokenType.string(operator_token.tokenType),
+                .right = right_ptr,
+            },
+        };
+    }
+
+    fn parseExpression(self: *Parser, op: Operator, program: *ast.Program) ParseError!ast.Expression {
+        _ = op;
+        const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
+        const exp = try parseFn(self, program);
+        return exp;
+    }
+
+    fn parseIdentifier(self: *Parser, _: *ast.Program) ParseError!ast.Expression {
         return ast.Expression{
             .identifier = ast.Identifier{
                 .token = self.current_token,
@@ -213,7 +207,7 @@ const Parser = struct {
         };
     }
 
-    fn parseIntegerLiteral(self: *Parser) ast.Expression {
+    fn parseIntegerLiteral(self: *Parser, _: *ast.Program) ParseError!ast.Expression {
         return ast.Expression{
             .integer_literal = ast.IntegerLiteral{
                 .token = self.current_token,
@@ -328,8 +322,6 @@ test "prefix expressions" {
         .{ .program = "-15;", .operator = "-", .expectedLiteral = "15" },
     };
 
-    std.debug.print("\n --- PREFIX EXPRESSIONS ---\n\n", .{});
-
     inline for (tests) |case| {
         var p = Parser.init(Lexer.init(case.program));
 
@@ -344,10 +336,6 @@ test "prefix expressions" {
         };
 
         const stmt: ast.Statement = program.statements.getLast();
-
-        std.debug.print("Active field: {s}\n", .{@tagName(stmt)});
-        std.debug.print("Active field: {s}\n", .{@tagName(stmt.expression.expression)});
-        //std.debug.print("Active field: {s}\n", .{@tagName(stmt.expression.expression.prefix.right)});
 
         testing.expect(std.mem.eql(u8, case.expectedLiteral, stmt.expression.expression.prefix.right.literal())) catch |err| {
             std.debug.print("{s} != {s}\n", .{ case.expectedLiteral, stmt.expression.expression.prefix.right.literal() });

@@ -57,10 +57,7 @@ pub const Expression = union(enum) {
 
     pub fn literal(self: Expression) []const u8 {
         switch (self) {
-            inline else => |case| {
-                std.debug.print("token type = {any}\n", .{case.token.tokenType});
-                return case.token.literal;
-            },
+            inline else => |case| return case.token.literal,
         }
     }
 };
@@ -86,14 +83,24 @@ pub const PrefixExpression = struct {
 
 pub const Program = struct {
     statements: std.ArrayList(Statement),
+    expressions: std.ArrayList(*const Expression),
+    alloc: std.mem.Allocator,
 
     pub fn init(alloc: std.mem.Allocator) Program {
         return Program{
             .statements = std.ArrayList(Statement).init(alloc),
+            .expressions = std.ArrayList(*const Expression).init(alloc),
+            .alloc = alloc,
         };
     }
 
     pub fn deinit(self: Program) void {
-        return self.statements.deinit();
+        // destroy all expressions that were allocated
+        for (self.expressions.items) |exp| {
+            self.alloc.destroy(exp);
+        }
+
+        self.expressions.deinit();
+        self.statements.deinit();
     }
 };
