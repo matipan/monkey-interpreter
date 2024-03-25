@@ -57,7 +57,10 @@ pub const Expression = union(enum) {
 
     pub fn literal(self: Expression) []const u8 {
         switch (self) {
-            inline else => |case| return case.token.literal,
+            inline else => |case| {
+                std.debug.print("token type = {any}\n", .{case.token.tokenType});
+                return case.token.literal;
+            },
         }
     }
 };
@@ -78,7 +81,7 @@ pub const PrefixExpression = struct {
     // The prefix token itself (e.g. !)
     token: Token,
     operator: []const u8,
-    right: *Expression,
+    right: *const Expression,
 };
 
 pub const Program = struct {

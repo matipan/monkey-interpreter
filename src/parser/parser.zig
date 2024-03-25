@@ -52,7 +52,6 @@ const Parser = struct {
 
         // iterate over the program until we reach the end of it
         while (self.current_token.tokenType != tokenType.eof) {
-
             // We parse top level tokens in it's own function that is responsible
             // for also advancing the parser and leaving it ready to process the
             // next token (which is why we look at current_token here).
@@ -121,7 +120,17 @@ const Parser = struct {
         // get the next token and obtain the prefixParseFn of that one
         self.nextToken();
 
-        var right = self.parseExpression(Operator.prefix) catch {
+        // if the expression can be parsed we return the complete PrefixExpression
+        // if it fails we return an empty expression
+        if (self.parseExpression(Operator.prefix)) |right| {
+            return ast.Expression{
+                .prefix = ast.PrefixExpression{
+                    .token = operator_token,
+                    .operator = tokenType.string(operator_token.tokenType),
+                    .right = &right,
+                },
+            };
+        } else |_| {
             return ast.Expression{
                 .empty = ast.EmptyExpression{
                     .token = Token{
@@ -130,21 +139,18 @@ const Parser = struct {
                     },
                 },
             };
-        };
-
-        return ast.Expression{
-            .prefix = ast.PrefixExpression{
-                .token = operator_token,
-                .operator = tokenType.string(operator_token.tokenType),
-                .right = &right,
-            },
-        };
+        }
     }
 
     fn parseExpression(self: *Parser, op: Operator) ParseError!ast.Expression {
-        _ = op;
         const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
-        return parseFn(self);
+        const exp = parseFn(self);
+        if (op == Operator.prefix) {
+            std.debug.print("right expression literal = {s}\n", .{exp.prefix.right.literal()});
+        }
+
+        std.debug.print("expression literal = {s}\n", .{exp.literal()});
+        return exp;
     }
 
     fn parseReturnStatement(self: *Parser) ParseError!ast.Statement {
@@ -325,6 +331,8 @@ test "prefix expressions" {
         .{ .program = "-15;", .operator = "-", .expectedLiteral = "15" },
     };
 
+    std.debug.print("\n --- PREFIX EXPRESSIONS ---\n\n", .{});
+
     inline for (tests) |case| {
         var p = Parser.init(Lexer.init(case.program));
 
@@ -339,6 +347,10 @@ test "prefix expressions" {
         };
 
         const stmt: ast.Statement = program.statements.getLast();
+
+        std.debug.print("Active field: {s}\n", .{@tagName(stmt)});
+        std.debug.print("Active field: {s}\n", .{@tagName(stmt.expression.expression)});
+        //std.debug.print("Active field: {s}\n", .{@tagName(stmt.expression.expression.prefix.right)});
 
         testing.expect(std.mem.eql(u8, case.expectedLiteral, stmt.expression.expression.prefix.right.literal())) catch |err| {
             std.debug.print("{s} != {s}\n", .{ case.expectedLiteral, stmt.expression.expression.prefix.right.literal() });
