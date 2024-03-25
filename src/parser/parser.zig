@@ -168,8 +168,7 @@ const Parser = struct {
         // get the next token and obtain the prefixParseFn of that one
         self.nextToken();
 
-        const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
-        const right = try parseFn(self, program);
+        const right = try self.parseExpression(Operator.prefix, program);
 
         const right_ptr = program.alloc.create(ast.Expression) catch |err| {
             std.debug.print("could not allocate expression: {any}\n", .{err});
