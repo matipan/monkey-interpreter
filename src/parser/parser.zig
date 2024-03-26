@@ -131,17 +131,16 @@ const Parser = struct {
         return ast.Statement{ .let = let };
     }
 
-    fn prefixParseFn(tokType: tokenType) ParseError!*const fn (*Parser, *ast.Program) ParseError!ast.Expression {
-        return switch (tokType) {
-            .ident => Parser.parseIdentifier,
-            .int => Parser.parseIntegerLiteral,
-            .bang, .minus => Parser.parsePrefixExpression,
-            else => ParseError.InternalError,
-        };
-    }
-
     fn parseExpressionStatement(self: *Parser, program: *ast.Program) ParseError!ast.Statement {
         const exp = try self.parseExpression(Operator.lowest, program);
+
+        // NOTE: not sure if handling this should actually be in this function.
+        // Maybe we need a bigger refactor?
+
+        // if the current token is an identifier or an integer literal
+        // we need to peek the next token to check if it's an operator. If
+        // it is an operator then we need to parse everything with a new
+        // parseInfixExpression (TODO: postfix expressions will be handled separately)
 
         // skip until we find a semi colon so that the parsing is ready for
         // the next statement
@@ -154,6 +153,22 @@ const Parser = struct {
                 .expression = exp,
             },
         };
+    }
+
+    fn prefixParseFn(tokType: tokenType) ParseError!*const fn (*Parser, *ast.Program) ParseError!ast.Expression {
+        return switch (tokType) {
+            .ident => Parser.parseIdentifier,
+            .int => Parser.parseIntegerLiteral,
+            .bang, .minus => Parser.parsePrefixExpression,
+            else => ParseError.InternalError,
+        };
+    }
+
+    fn parseExpression(self: *Parser, op: Operator, program: *ast.Program) ParseError!ast.Expression {
+        _ = op;
+        const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
+        const exp = try parseFn(self, program);
+        return exp;
     }
 
     // NOTE: I'm not entirely sure if I'm handling allocations and such the right
@@ -189,13 +204,6 @@ const Parser = struct {
                 .right = right_ptr,
             },
         };
-    }
-
-    fn parseExpression(self: *Parser, op: Operator, program: *ast.Program) ParseError!ast.Expression {
-        _ = op;
-        const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
-        const exp = try parseFn(self, program);
-        return exp;
     }
 
     fn parseIdentifier(self: *Parser, _: *ast.Program) ParseError!ast.Expression {
