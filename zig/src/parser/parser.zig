@@ -5,7 +5,7 @@ const Token = @import("../token/index.zig").Token;
 const tokenType = @import("../token/index.zig").TokenType;
 const ast = @import("../ast/ast.zig");
 
-const Operator = enum {
+const Operator = enum(u8) {
     lowest,
     equals,
     lessgreater,
@@ -13,6 +13,16 @@ const Operator = enum {
     product,
     prefix,
     call,
+
+    pub fn precedence(tokType: tokenType) u8 {
+        return switch (tokType) {
+            .eq, .notEq => @intFromEnum(Operator.equals),
+            .lt, .gt => @intFromEnum(Operator.lessgreater),
+            .plus, .minus => @intFromEnum(Operator.sum),
+            .slash, .asterisk => @intFromEnum(Operator.product),
+            else => @intFromEnum(Operator.lowest),
+        };
+    }
 };
 
 const ParseError = error{
@@ -132,15 +142,7 @@ const Parser = struct {
     }
 
     fn parseExpressionStatement(self: *Parser, program: *ast.Program) ParseError!ast.Statement {
-        const exp = try self.parseExpression(Operator.lowest, program);
-
-        // NOTE: not sure if handling this should actually be in this function.
-        // Maybe we need a bigger refactor?
-
-        // if the current token is an identifier or an integer literal
-        // we need to peek the next token to check if it's an operator. If
-        // it is an operator then we need to parse everything with a new
-        // parseInfixExpression (TODO: postfix expressions will be handled separately)
+        const exp = try self.parseExpression(@intFromEnum(Operator.lowest), program);
 
         // skip until we find a semi colon so that the parsing is ready for
         // the next statement
@@ -164,16 +166,84 @@ const Parser = struct {
         };
     }
 
-    fn parseExpression(self: *Parser, op: Operator, program: *ast.Program) ParseError!ast.Expression {
-        _ = op;
-        const parseFn = try Parser.prefixParseFn(self.current_token.tokenType);
-        const exp = try parseFn(self, program);
-        return exp;
+    fn infixParseFn(tokType: tokenType) ParseError!*const fn (*Parser, *ast.Program, ast.Expression) ParseError!ast.Expression {
+        return switch (tokType) {
+            .plus, .minus, .slash, .asterisk, .eq, .notEq, .lt, .gt => Parser.parseInfixExpression,
+            else => ParseError.InternalError,
+        };
+    }
+
+    fn parseExpression(self: *Parser, precedence: u8, program: *ast.Program) ParseError!ast.Expression {
+        const parseFn = try prefixParseFn(self.current_token.tokenType);
+        var leftExp = try parseFn(self, program);
+
+        // we exit when we find a semicolon or the precedence of the operator is
+        // greater than the precedence of the next token
+        while (self.peek_token.tokenType != tokenType.semicolon and precedence < Operator.precedence(self.peek_token.tokenType)) {
+            // if we don't find any we need to return the left expression
+            const infixFn = infixParseFn(self.peek_token.tokenType) catch {
+                // break of the loop to return leftExp below
+                break;
+            };
+
+            // move on to the next token, parse the new expression and re-assign
+            // it. This is so that more complicated expressions that have many
+            // infix operations within can be created properly
+            self.nextToken();
+            leftExp = try infixFn(self, program, leftExp);
+        }
+
+        return leftExp;
+    }
+
+    // parseInfixExpression gets called once the `left` expression has already
+    // been parsed
+    fn parseInfixExpression(self: *Parser, program: *ast.Program, left: ast.Expression) ParseError!ast.Expression {
+        const cur_token = self.current_token;
+        const prec = Operator.precedence(cur_token.tokenType);
+
+        self.nextToken();
+        const right = try self.parseExpression(prec, program);
+
+        // allocate a pointer for the right expression
+        const right_ptr = program.alloc.create(ast.Expression) catch |err| {
+            std.debug.print("could not allocate expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+
+        program.expressions.append(right_ptr) catch |err| {
+            std.debug.print("could not append expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+
+        right_ptr.* = right;
+
+        // allocate a pointer for the left expression
+        const left_ptr = program.alloc.create(ast.Expression) catch |err| {
+            std.debug.print("could not allocate expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+
+        program.expressions.append(left_ptr) catch |err| {
+            std.debug.print("could not append expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+
+        left_ptr.* = left;
+
+        return ast.Expression{
+            .infix = ast.InfixExpression{
+                .right = right_ptr,
+                .left = left_ptr,
+                .operator = tokenType.string(cur_token.tokenType),
+                .token = cur_token,
+            },
+        };
     }
 
     // NOTE: I'm not entirely sure if I'm handling allocations and such the right
     // way. But I want to finish the book and maybe later learn a bit better
-    // how we could structure in a more native zig way. Right now it feels patched
+    // how we could structure things in a more native zig way. Right now it feels patched
     // to make it work with how the Go version of the interpreter is written
     fn parsePrefixExpression(self: *Parser, program: *ast.Program) ParseError!ast.Expression {
         const operator_token = self.current_token;
@@ -183,7 +253,7 @@ const Parser = struct {
         // get the next token and obtain the prefixParseFn of that one
         self.nextToken();
 
-        const right = try self.parseExpression(Operator.prefix, program);
+        const right = try self.parseExpression(@intFromEnum(Operator.prefix), program);
 
         const right_ptr = program.alloc.create(ast.Expression) catch |err| {
             std.debug.print("could not allocate expression: {any}\n", .{err});
@@ -351,6 +421,57 @@ test "prefix expressions" {
 
         testing.expect(std.mem.eql(u8, case.operator, stmt.expression.expression.prefix.operator)) catch |err| {
             std.debug.print("{s} != {s}\n", .{ case.operator, stmt.expression.expression.prefix.operator });
+            return err;
+        };
+    }
+}
+
+test "infix expressions" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const tests = [_]struct {
+        program: []const u8,
+        operator: []const u8,
+        expectedRightLiteral: []const u8,
+        expectedLeftLiteral: []const u8,
+    }{
+        .{ .program = "5+5;", .operator = "+", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
+        .{ .program = "5*5;", .operator = "*", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
+        .{ .program = "5/5;", .operator = "/", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
+        .{ .program = "5>5;", .operator = ">", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
+        .{ .program = "5<5;", .operator = "<", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
+        .{ .program = "5==5;", .operator = "==", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
+        .{ .program = "5!=5;", .operator = "!=", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
+    };
+
+    inline for (tests) |case| {
+        var p = Parser.init(Lexer.init(case.program));
+
+        const program = p.parseProgram(allocator) catch |err| {
+            std.debug.print("parseProgram failed with = {any}\n", .{err});
+            return err;
+        };
+
+        testing.expect(program.statements.items.len == 1) catch |err| {
+            std.debug.print("{d} != 1\n", .{program.statements.items.len});
+            return err;
+        };
+
+        const stmt: ast.Statement = program.statements.getLast();
+
+        testing.expect(std.mem.eql(u8, case.expectedRightLiteral, stmt.expression.expression.infix.right.literal())) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ case.expectedRightLiteral, stmt.expression.expression.infix.right.literal() });
+            return err;
+        };
+
+        testing.expect(std.mem.eql(u8, case.expectedLeftLiteral, stmt.expression.expression.infix.left.literal())) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ case.expectedLeftLiteral, stmt.expression.expression.infix.left.literal() });
+            return err;
+        };
+
+        testing.expect(std.mem.eql(u8, case.operator, stmt.expression.expression.infix.operator)) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ case.operator, stmt.expression.expression.infix.operator });
             return err;
         };
     }

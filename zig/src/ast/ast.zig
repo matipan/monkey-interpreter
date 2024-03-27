@@ -54,6 +54,7 @@ pub const Expression = union(enum) {
     identifier: Identifier,
     integer_literal: IntegerLiteral,
     prefix: PrefixExpression,
+    infix: InfixExpression,
 
     pub fn literal(self: Expression) []const u8 {
         switch (self) {
@@ -78,6 +79,14 @@ pub const PrefixExpression = struct {
     // The prefix token itself (e.g. !)
     token: Token,
     operator: []const u8,
+    right: *const Expression,
+};
+
+pub const InfixExpression = struct {
+    // The operator token itself (e.g. !)
+    token: Token,
+    operator: []const u8,
+    left: *const Expression,
     right: *const Expression,
 };
 
