@@ -109,7 +109,7 @@ const Parser = struct {
         return ast.Statement{ .return_with = returnStmt };
     }
 
-    fn parseLetStatement(self: *Parser) ParseError!ast.Statement {
+    fn parseLetStatement(self: *Parser, prog: *ast.Program) ParseError!ast.Statement {
         // if the next token is not an identifier then this is an invalid
         // let statement
         if (self.peek_token.tokenType != tokenType.ident) {
@@ -177,11 +177,11 @@ const Parser = struct {
 
     fn parseExpression(self: *Parser, precedence: u8, program: *ast.Program) ParseError!ast.Expression {
         const parseFn = try prefixParseFn(self.current_token.tokenType);
-        var leftExp = try parseFn(self, program);
+        var left_exp = try parseFn(self, program);
 
         // we exit when we find a semicolon or the precedence of the operator is
         // greater than the precedence of the next token
-        while (self.peek_token.tokenType != tokenType.semicolon and self.current_token.tokenType != tokenType.eof and precedence < Operator.precedence(self.peek_token.tokenType)) {
+        while (self.peek_token.tokenType != tokenType.semicolon and precedence < Operator.precedence(self.peek_token.tokenType)) {
             // if we don't find any we need to return the left expression
             const infixFn = infixParseFn(self.peek_token.tokenType) catch {
                 // break of the loop to return leftExp below
@@ -192,10 +192,11 @@ const Parser = struct {
             // it. This is so that more complicated expressions that have many
             // infix operations within can be created properly
             self.nextToken();
-            leftExp = try infixFn(self, program, leftExp);
+
+            left_exp = try infixFn(self, program, left_exp);
         }
 
-        return leftExp;
+        return left_exp;
     }
 
     // parseInfixExpression gets called once the `left` expression has already
@@ -479,51 +480,75 @@ test "infix expressions" {
     }
 }
 
-// NOTE: i have not implemented converting programs to strings, maninly because
-// it felt a bit like a hassle. The main problem was related with string allocations
-// and proper management of memory in the context of it. I need to think a bit deeper
-// how that would work so that (in a recursion fashion too) with limited memory
-// that needs to be properly freed. I could implement this without caring for memory
-// allocation?
-test "complex infix expressions" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+test "embedded expressions" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     const allocator = gpa.allocator();
 
-    var p = Parser.init(Lexer.init("a+b/c;"));
-
-    const program = p.parseProgram(allocator) catch |err| {
-        std.debug.print("parseProgram failed with = {any}\n", .{err});
-        return err;
-    };
-    defer program.deinit();
-
-    testing.expect(program.statements.items.len == 1) catch |err| {
-        std.debug.print("{d} != 1\n", .{program.statements.items.len});
-        return err;
-    };
-
-    const stmt: ast.Statement = program.statements.getLast();
-
-    const infix = stmt.expression.expression.infix;
-
-    testing.expect(std.mem.eql(u8, infix.left.literal(), "a")) catch |err| {
-        std.debug.print("{s} != {s}\n", .{ infix.left.literal(), "a" });
-        return err;
+    const tests = [_]struct {
+        program: []const u8,
+        expectedString: []const u8,
+    }{
+        .{ .program = "-a;", .expectedString = "(-a)\n" },
+        .{ .program = "-a * b;", .expectedString = "((-a)*b)\n" },
+        .{ .program = "!-a;", .expectedString = "(!(-a))\n" },
+        .{ .program = "a+b+c;", .expectedString = "((a+b)+c)\n" },
+        .{ .program = "a+b-c;", .expectedString = "((a+b)-c)\n" },
+        .{ .program = "a*b*c;", .expectedString = "((a*b)*c)\n" },
+        .{ .program = "a*b/c;", .expectedString = "((a*b)/c)\n" },
+        .{ .program = "a+b/c;", .expectedString = "(a+(b/c))\n" },
+        .{ .program = "a+b*c+d/e-f;", .expectedString = "(((a+(b*c))+(d/e))-f)\n" },
+        .{ .program = "3+4; -5 * 5;", .expectedString = "(3+4)\n((-5)*5)\n" },
+        .{ .program = "5>4==3<4;", .expectedString = "((5>4)==(3<4))\n" },
+        .{ .program = "5>4!=3<4;", .expectedString = "((5>4)!=(3<4))\n" },
+        .{ .program = "3 + 4*5 == 3*1 + 4*5;", .expectedString = "((3+(4*5))==((3*1)+(4*5)))\n" },
     };
 
-    const right = infix.right.infix;
-    testing.expect(std.mem.eql(u8, right.operator, "/")) catch |err| {
-        std.debug.print("{s} != {s}\n", .{ right.operator, "/" });
-        return err;
+    inline for (tests) |case| {
+        var p = Parser.init(Lexer.init(case.program));
+
+        const program = p.parseProgram(allocator) catch |err| {
+            std.debug.print("parseProgram failed with = {any}\n", .{err});
+            return err;
+        };
+        defer program.deinit();
+
+        const value = try program.string(allocator);
+        testing.expect(std.mem.eql(u8, value, case.expectedString)) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ value, case.expectedString });
+            return err;
+        };
+    }
+}
+
+test "program printing" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
+    const allocator = gpa.allocator();
+
+    const tests = [_]struct {
+        program: []const u8,
+        expectedString: []const u8,
+    }{
+        .{ .program = "let five = 5;", .expectedString = "let five = 5\n" },
+        .{ .program = "let five = add(x,y);", .expectedString = "let five = add\n" },
+        .{ .program = "return five;", .expectedString = "return five\n" },
+        .{ .program = "return 5;", .expectedString = "return 5\n" },
     };
-    testing.expect(std.mem.eql(u8, right.left.literal(), "b")) catch |err| {
-        std.debug.print("{s} != {s}\n", .{ right.left.literal(), "b" });
-        return err;
-    };
-    testing.expect(std.mem.eql(u8, right.right.literal(), "c")) catch |err| {
-        std.debug.print("{s} != {s}\n", .{ right.left.literal(), "c" });
-        return err;
-    };
+
+    inline for (tests) |case| {
+        var p = Parser.init(Lexer.init(case.program));
+
+        const program = p.parseProgram(allocator) catch |err| {
+            std.debug.print("parseProgram failed with = {any}\n", .{err});
+            return err;
+        };
+        defer program.deinit();
+
+        const value = try program.string(allocator);
+        testing.expect(std.mem.eql(u8, value, case.expectedString)) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ value, case.expectedString });
+            return err;
+        };
+    }
 }
 
 test "Parser.parseLetStatement" {

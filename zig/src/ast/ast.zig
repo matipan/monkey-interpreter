@@ -22,6 +22,12 @@ pub const Statement = union(enum) {
             inline else => |case| return case.literal(),
         }
     }
+
+    pub fn string(self: Statement, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        switch (self) {
+            inline else => |case| return case.string(alloc),
+        }
+    }
 };
 
 pub const LetStatement = struct {
@@ -31,6 +37,21 @@ pub const LetStatement = struct {
     pub fn literal(self: LetStatement) []const u8 {
         return self.name.token.literal;
     }
+
+    pub fn string(self: LetStatement, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        var str = std.ArrayList(u8).init(alloc);
+        defer str.deinit();
+
+        try str.appendSlice("let");
+        try str.appendSlice(" ");
+        try str.appendSlice(self.name.token.literal);
+        try str.appendSlice(" = ");
+        try str.appendSlice(try self.value.string(alloc));
+
+        const result = try alloc.alloc(u8, str.items.len);
+        std.mem.copyForwards(u8, result, str.items);
+        return result;
+    }
 };
 
 pub const ReturnStatement = struct {
@@ -39,6 +60,18 @@ pub const ReturnStatement = struct {
     pub fn literal(self: ReturnStatement) []const u8 {
         return self.identifier.token.literal;
     }
+
+    pub fn string(self: ReturnStatement, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        var str = std.ArrayList(u8).init(alloc);
+        defer str.deinit();
+
+        try str.appendSlice("return ");
+        try str.appendSlice(self.identifier.token.literal);
+
+        const result = try alloc.alloc(u8, str.items.len);
+        std.mem.copyForwards(u8, result, str.items);
+        return result;
+    }
 };
 
 pub const ExpressionStatement = struct {
@@ -46,6 +79,10 @@ pub const ExpressionStatement = struct {
 
     pub fn literal(self: ExpressionStatement) []const u8 {
         return self.expression.literal();
+    }
+
+    pub fn string(self: ExpressionStatement, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        return self.expression.string(alloc);
     }
 };
 
@@ -61,18 +98,42 @@ pub const Expression = union(enum) {
             inline else => |case| return case.token.literal,
         }
     }
+
+    pub fn string(self: Expression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        switch (self) {
+            inline else => |case| return case.string(alloc),
+        }
+    }
 };
 
 pub const EmptyExpression = struct {
     token: Token,
+
+    pub fn string(self: EmptyExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        const result = try alloc.alloc(u8, self.token.literal.len);
+        std.mem.copyForwards(u8, result, self.token.literal);
+        return result;
+    }
 };
 
 pub const Identifier = struct {
     token: Token,
+
+    pub fn string(self: Identifier, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        const result = try alloc.alloc(u8, self.token.literal.len);
+        std.mem.copyForwards(u8, result, self.token.literal);
+        return result;
+    }
 };
 
 pub const IntegerLiteral = struct {
     token: Token,
+
+    pub fn string(self: IntegerLiteral, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        const result = try alloc.alloc(u8, self.token.literal.len);
+        std.mem.copyForwards(u8, result, self.token.literal);
+        return result;
+    }
 };
 
 pub const PrefixExpression = struct {
@@ -80,14 +141,46 @@ pub const PrefixExpression = struct {
     token: Token,
     operator: []const u8,
     right: *const Expression,
+
+    pub fn string(self: PrefixExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        var str = std.ArrayList(u8).init(alloc);
+
+        try str.appendSlice("(");
+        try str.appendSlice(self.operator);
+        const rightExp = try self.right.string(alloc);
+        try str.appendSlice(rightExp);
+        try str.appendSlice(")");
+
+        const result = try alloc.alloc(u8, str.items.len);
+        std.mem.copyForwards(u8, result, str.items);
+
+        return result;
+    }
 };
 
 pub const InfixExpression = struct {
-    // The operator token itself (e.g. !)
     token: Token,
+    // The operator token itself (e.g. !)
     operator: []const u8,
     left: *const Expression,
     right: *const Expression,
+
+    pub fn string(self: InfixExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        var str = std.ArrayList(u8).init(alloc);
+
+        try str.appendSlice("(");
+        const leftExp = try self.left.string(alloc);
+        try str.appendSlice(leftExp);
+        try str.appendSlice(self.operator);
+        const rightExp = try self.right.string(alloc);
+        try str.appendSlice(rightExp);
+        try str.appendSlice(")");
+
+        const result = try alloc.alloc(u8, str.items.len);
+        std.mem.copyForwards(u8, result, str.items);
+
+        return result;
+    }
 };
 
 pub const Program = struct {
@@ -111,5 +204,20 @@ pub const Program = struct {
 
         self.expressions.deinit();
         self.statements.deinit();
+    }
+
+    // lets start by simply printing a string for each statement and appending
+    // a new line at the end of each
+    //
+    pub fn string(self: Program, alloc: std.mem.Allocator) ![]const u8 {
+        var prog = std.ArrayList(u8).init(alloc);
+
+        for (self.statements.items) |stmt| {
+            const value: []u8 = try stmt.string(alloc);
+            try prog.appendSlice(value);
+            try prog.append('\n');
+        }
+
+        return prog.items;
     }
 };
