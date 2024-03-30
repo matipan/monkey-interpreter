@@ -179,7 +179,7 @@ const Parser = struct {
 
         // we exit when we find a semicolon or the precedence of the operator is
         // greater than the precedence of the next token
-        while (self.peek_token.tokenType != tokenType.semicolon and precedence < Operator.precedence(self.peek_token.tokenType)) {
+        while (self.peek_token.tokenType != tokenType.semicolon and self.current_token.tokenType != tokenType.eof and precedence < Operator.precedence(self.peek_token.tokenType)) {
             // if we don't find any we need to return the left expression
             const infixFn = infixParseFn(self.peek_token.tokenType) catch {
                 // break of the loop to return leftExp below
@@ -475,6 +475,53 @@ test "infix expressions" {
             return err;
         };
     }
+}
+
+// NOTE: i have not implemented converting programs to strings, maninly because
+// it felt a bit like a hassle. The main problem was related with string allocations
+// and proper management of memory in the context of it. I need to think a bit deeper
+// how that would work so that (in a recursion fashion too) with limited memory
+// that needs to be properly freed. I could implement this without caring for memory
+// allocation?
+test "complex infix expressions" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    var p = Parser.init(Lexer.init("a+b/c;"));
+
+    const program = p.parseProgram(allocator) catch |err| {
+        std.debug.print("parseProgram failed with = {any}\n", .{err});
+        return err;
+    };
+    defer program.deinit();
+
+    testing.expect(program.statements.items.len == 1) catch |err| {
+        std.debug.print("{d} != 1\n", .{program.statements.items.len});
+        return err;
+    };
+
+    const stmt: ast.Statement = program.statements.getLast();
+
+    const infix = stmt.expression.expression.infix;
+
+    testing.expect(std.mem.eql(u8, infix.left.literal(), "a")) catch |err| {
+        std.debug.print("{s} != {s}\n", .{ infix.left.literal(), "a" });
+        return err;
+    };
+
+    const right = infix.right.infix;
+    testing.expect(std.mem.eql(u8, right.operator, "/")) catch |err| {
+        std.debug.print("{s} != {s}\n", .{ right.operator, "/" });
+        return err;
+    };
+    testing.expect(std.mem.eql(u8, right.left.literal(), "b")) catch |err| {
+        std.debug.print("{s} != {s}\n", .{ right.left.literal(), "b" });
+        return err;
+    };
+    testing.expect(std.mem.eql(u8, right.right.literal(), "c")) catch |err| {
+        std.debug.print("{s} != {s}\n", .{ right.left.literal(), "c" });
+        return err;
+    };
 }
 
 test "Parser.parseLetStatement" {
