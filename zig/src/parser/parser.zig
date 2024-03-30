@@ -66,7 +66,7 @@ const Parser = struct {
             // for also advancing the parser and leaving it ready to process the
             // next token (which is why we look at current_token here).
             const stmt = switch (self.current_token.tokenType) {
-                .let => try self.parseLetStatement(),
+                .let => try self.parseLetStatement(&prog),
                 .returnWith => try self.parseReturnStatement(),
                 // receives a program that will be used to allocate expression
                 // on the heap that live in the context of the program
@@ -128,9 +128,11 @@ const Parser = struct {
             return ParseError.MissingAssign;
         }
 
-        // TODO: handle expression statements
-        // now we just need to store the value of the let statement. We also
-        // store the entire token. The value needs to be an expression stmt
+        // move over the token after the assign so that we can call parseExpression
+        self.nextToken();
+        self.nextToken();
+
+        let.value = try self.parseExpression(Operator.precedence(self.current_token.tokenType), prog);
 
         // skip until we find a semi colon so that the parsing is ready for
         // the next statement
@@ -535,7 +537,8 @@ test "Parser.parseLetStatement" {
     inline for (tests) |case| {
         var p = Parser.init(Lexer.init(case.program));
 
-        const let = try p.parseLetStatement();
+        var prog = ast.Program.init(std.testing.allocator);
+        const let = try p.parseLetStatement(&prog);
 
         testing.expect(let.let.name.token.tokenType == case.expectedLetIdent.token.tokenType) catch |err| {
             std.debug.print("{any} != {any}\n", .{ let.let.name.token.tokenType, case.expectedLetIdent.token.tokenType });
@@ -560,7 +563,8 @@ test "Parser.parseLetStatement fail" {
     inline for (tests) |case| {
         var p = Parser.init(Lexer.init(case.program));
 
-        const let = p.parseLetStatement();
+        var prog = ast.Program.init(std.testing.allocator);
+        const let = p.parseLetStatement(&prog);
         try testing.expectError(case.expectedErr, let);
     }
 }
