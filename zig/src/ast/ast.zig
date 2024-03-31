@@ -46,7 +46,9 @@ pub const LetStatement = struct {
         try str.appendSlice(" ");
         try str.appendSlice(self.name.token.literal);
         try str.appendSlice(" = ");
-        try str.appendSlice(try self.value.string(alloc));
+        const exp = try self.value.string(alloc);
+        defer alloc.free(exp);
+        try str.appendSlice(exp);
 
         const result = try alloc.alloc(u8, str.items.len);
         std.mem.copyForwards(u8, result, str.items);
@@ -68,6 +70,8 @@ pub const ReturnStatement = struct {
 
         try str.appendSlice("return ");
         const exp = try self.expression.string(alloc);
+        defer alloc.free(exp);
+
         try str.appendSlice(exp);
 
         const result = try alloc.alloc(u8, str.items.len);
@@ -162,6 +166,7 @@ pub const PrefixExpression = struct {
         try str.appendSlice("(");
         try str.appendSlice(self.operator);
         const rightExp = try self.right.string(alloc);
+        defer alloc.free(rightExp);
         try str.appendSlice(rightExp);
         try str.appendSlice(")");
 
@@ -184,10 +189,15 @@ pub const InfixExpression = struct {
         defer str.deinit();
 
         try str.appendSlice("(");
+
+        // appendSlice does @memcpy internally so we can free the memory
+        // after we've added to the slice.
         const leftExp = try self.left.string(alloc);
+        defer alloc.free(leftExp);
         try str.appendSlice(leftExp);
         try str.appendSlice(self.operator);
         const rightExp = try self.right.string(alloc);
+        defer alloc.free(rightExp);
         try str.appendSlice(rightExp);
         try str.appendSlice(")");
 
@@ -229,7 +239,11 @@ pub const Program = struct {
         defer prog.deinit();
 
         for (self.statements.items) |stmt| {
+            // we can defer the freeing of this memory block
+            // because we are copying it below
             const value: []u8 = try stmt.string(alloc);
+            defer alloc.free(value);
+
             try prog.appendSlice(value);
             try prog.append('\n');
         }

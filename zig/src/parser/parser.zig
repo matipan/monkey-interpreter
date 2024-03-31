@@ -305,8 +305,9 @@ const Parser = struct {
 };
 
 test "Parser.parseProgram" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     const code =
         \\let five = 5;
@@ -342,8 +343,9 @@ test "Parser.parseProgram" {
 }
 
 test "identifier expressions" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var p = Parser.init(Lexer.init("foobar;"));
     const program = p.parseProgram(allocator) catch |err| {
@@ -370,14 +372,16 @@ test "identifier expressions" {
 }
 
 test "integer literal expressions" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var p = Parser.init(Lexer.init("5;"));
     const program = p.parseProgram(allocator) catch |err| {
         std.debug.print("parseProgram failed with = {any}\n", .{err});
         return err;
     };
+    defer program.deinit();
 
     testing.expect(program.statements.items.len == 1) catch |err| {
         std.debug.print("{d} != 1\n", .{program.statements.items.len});
@@ -398,8 +402,9 @@ test "integer literal expressions" {
 }
 
 test "prefix expressions" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     const tests = [_]struct {
         program: []const u8,
@@ -417,6 +422,7 @@ test "prefix expressions" {
             std.debug.print("parseProgram failed with = {any}\n", .{err});
             return err;
         };
+        defer program.deinit();
 
         testing.expect(program.statements.items.len == 1) catch |err| {
             std.debug.print("{d} != 1\n", .{program.statements.items.len});
@@ -438,8 +444,7 @@ test "prefix expressions" {
 }
 
 test "infix expressions" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const tests = [_]struct {
         program: []const u8,
@@ -460,10 +465,12 @@ test "infix expressions" {
     inline for (tests) |case| {
         var p = Parser.init(Lexer.init(case.program));
 
+        // no need to deinit, arena allocator takes care of it
         const program = p.parseProgram(allocator) catch |err| {
             std.debug.print("parseProgram failed with = {any}\n", .{err});
             return err;
         };
+        defer program.deinit();
 
         testing.expect(program.statements.items.len == 1) catch |err| {
             std.debug.print("{d} != 1\n", .{program.statements.items.len});
@@ -490,15 +497,7 @@ test "infix expressions" {
 }
 
 test "embedded expressions" {
-    // WARN: Using the GPA allocator on tests is hiding significant memory leaks
-    // When I switch to the `std.testing.allocator` I get a bunch of warning that
-    // are all about memory leaks for the array of u8 that are allocating for
-    // storing the copied strings. however, if I add an `allocator.free` of the
-    // array that gets returned by the string function I still get the memory
-    // leak. Not sure why exactly and I need to understand much better
-    // how memory and allocators work in Zig.
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const tests = [_]struct {
         program: []const u8,
@@ -530,6 +529,8 @@ test "embedded expressions" {
         defer program.deinit();
 
         const value = try program.string(allocator);
+        defer allocator.free(value);
+
         testing.expect(std.mem.eql(u8, value, case.expectedString)) catch |err| {
             std.debug.print("{s} != {s}\n", .{ value, case.expectedString });
             return err;
@@ -538,8 +539,9 @@ test "embedded expressions" {
 }
 
 test "program printing" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     const tests = [_]struct {
         program: []const u8,
@@ -569,8 +571,7 @@ test "program printing" {
 }
 
 test "Parser.parseLetStatement" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const tests = [_]struct {
         program: []const u8,
@@ -583,6 +584,8 @@ test "Parser.parseLetStatement" {
         var p = Parser.init(Lexer.init(case.program));
 
         var prog = ast.Program.init(allocator);
+        defer prog.deinit();
+
         const let = try p.parseLetStatement(&prog);
 
         testing.expect(let.let.name.token.tokenType == case.expectedLetIdent.token.tokenType) catch |err| {
@@ -597,8 +600,7 @@ test "Parser.parseLetStatement" {
 }
 
 test "Parser.parseLetStatement fail" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const tests = [_]struct {
         program: []const u8,
@@ -612,14 +614,14 @@ test "Parser.parseLetStatement fail" {
         var p = Parser.init(Lexer.init(case.program));
 
         var prog = ast.Program.init(allocator);
+        defer prog.deinit();
         const let = p.parseLetStatement(&prog);
         try testing.expectError(case.expectedErr, let);
     }
 }
 
 test "Parser.parseReturnStatement" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const tests = [_]struct {
         program: []const u8,
@@ -632,9 +634,11 @@ test "Parser.parseReturnStatement" {
         var p = Parser.init(Lexer.init(case.program));
 
         var prog = ast.Program.init(allocator);
+        defer prog.deinit();
 
         const rw = try p.parseReturnStatement(&prog);
         const result = try rw.string(allocator);
+        defer allocator.free(result);
 
         testing.expect(std.mem.eql(u8, result, case.expectedReturn)) catch |err| {
             std.debug.print("{s} != {s}\n", .{ result, case.expectedReturn });
