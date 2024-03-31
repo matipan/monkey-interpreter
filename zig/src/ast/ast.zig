@@ -55,10 +55,11 @@ pub const LetStatement = struct {
 };
 
 pub const ReturnStatement = struct {
-    identifier: Identifier,
+    token: Token,
+    expression: Expression,
 
     pub fn literal(self: ReturnStatement) []const u8 {
-        return self.identifier.token.literal;
+        return self.expression.literal();
     }
 
     pub fn string(self: ReturnStatement, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
@@ -66,7 +67,8 @@ pub const ReturnStatement = struct {
         defer str.deinit();
 
         try str.appendSlice("return ");
-        try str.appendSlice(self.identifier.token.literal);
+        const exp = try self.expression.string(alloc);
+        try str.appendSlice(exp);
 
         const result = try alloc.alloc(u8, str.items.len);
         std.mem.copyForwards(u8, result, str.items);
@@ -90,6 +92,7 @@ pub const Expression = union(enum) {
     empty: EmptyExpression,
     identifier: Identifier,
     integer_literal: IntegerLiteral,
+    boolean_literal: BooleanLiteral,
     prefix: PrefixExpression,
     infix: InfixExpression,
 
@@ -136,6 +139,16 @@ pub const IntegerLiteral = struct {
     }
 };
 
+pub const BooleanLiteral = struct {
+    token: Token,
+
+    pub fn string(self: BooleanLiteral, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        const result = try alloc.alloc(u8, self.token.literal.len);
+        std.mem.copyForwards(u8, result, self.token.literal);
+        return result;
+    }
+};
+
 pub const PrefixExpression = struct {
     // The prefix token itself (e.g. !)
     token: Token,
@@ -144,6 +157,7 @@ pub const PrefixExpression = struct {
 
     pub fn string(self: PrefixExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
+        defer str.deinit();
 
         try str.appendSlice("(");
         try str.appendSlice(self.operator);
@@ -167,6 +181,7 @@ pub const InfixExpression = struct {
 
     pub fn string(self: InfixExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
+        defer str.deinit();
 
         try str.appendSlice("(");
         const leftExp = try self.left.string(alloc);
@@ -209,8 +224,9 @@ pub const Program = struct {
     // lets start by simply printing a string for each statement and appending
     // a new line at the end of each
     //
-    pub fn string(self: Program, alloc: std.mem.Allocator) ![]const u8 {
+    pub fn string(self: Program, alloc: std.mem.Allocator) ![]u8 {
         var prog = std.ArrayList(u8).init(alloc);
+        defer prog.deinit();
 
         for (self.statements.items) |stmt| {
             const value: []u8 = try stmt.string(alloc);
@@ -218,6 +234,8 @@ pub const Program = struct {
             try prog.append('\n');
         }
 
-        return prog.items;
+        const result = try alloc.alloc(u8, prog.items.len);
+        std.mem.copyForwards(u8, result, prog.items);
+        return result;
     }
 };
