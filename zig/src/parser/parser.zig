@@ -164,6 +164,7 @@ const Parser = struct {
             .int => Parser.parseIntegerLiteral,
             .boolTrue, .boolFalse => Parser.parseBooleanLiteral,
             .bang, .minus => Parser.parsePrefixExpression,
+            .lparen => Parser.parseGroupedExpression,
             else => ParseError.InternalError,
         };
     }
@@ -244,8 +245,8 @@ const Parser = struct {
         };
     }
 
-    // NOTE: I'm not entirely sure if I'm handling allocations and such the right
-    // way. But I want to finish the book and maybe later learn a bit better
+    // NOTE: I'm not entirely sure if I'm handling allocations the right way.
+    // But I want to finish the book and maybe later learn a bit better
     // how we could structure things in a more native zig way. Right now it feels patched
     // to make it work with how the Go version of the interpreter is written
     fn parsePrefixExpression(self: *Parser, program: *ast.Program) ParseError!ast.Expression {
@@ -277,6 +278,20 @@ const Parser = struct {
                 .right = right_ptr,
             },
         };
+    }
+
+    fn parseGroupedExpression(self: *Parser, program: *ast.Program) ParseError!ast.Expression {
+        self.nextToken();
+
+        const exp = try self.parseExpression(@intFromEnum(Operator.lowest), program);
+        if (self.peek_token.tokenType != tokenType.rparen) {
+            return ParseError.InternalError;
+        }
+
+        // ignore the rparen and leave the parser ready to parse the next stmt
+        self.nextToken();
+
+        return exp;
     }
 
     fn parseIdentifier(self: *Parser, _: *ast.Program) ParseError!ast.Expression {
@@ -460,6 +475,7 @@ test "infix expressions" {
         .{ .program = "5==5;", .operator = "==", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
         .{ .program = "5!=5;", .operator = "!=", .expectedRightLiteral = "5", .expectedLeftLiteral = "5" },
         .{ .program = "true != false;", .operator = "!=", .expectedRightLiteral = "false", .expectedLeftLiteral = "true" },
+        .{ .program = "true == false;", .operator = "==", .expectedRightLiteral = "false", .expectedLeftLiteral = "true" },
     };
 
     inline for (tests) |case| {
@@ -517,6 +533,35 @@ test "embedded expressions" {
         .{ .program = "5>4!=3<4;", .expectedString = "((5>4)!=(3<4))\n" },
         .{ .program = "3 + 4*5 == 3*1 + 4*5;", .expectedString = "((3+(4*5))==((3*1)+(4*5)))\n" },
         .{ .program = "true==false;", .expectedString = "(true==false)\n" },
+    };
+
+    inline for (tests) |case| {
+        var p = Parser.init(Lexer.init(case.program));
+
+        const program = p.parseProgram(allocator) catch |err| {
+            std.debug.print("parseProgram failed with = {any}\n", .{err});
+            return err;
+        };
+        defer program.deinit();
+
+        const value = try program.string(allocator);
+        defer allocator.free(value);
+
+        testing.expect(std.mem.eql(u8, value, case.expectedString)) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ value, case.expectedString });
+            return err;
+        };
+    }
+}
+
+test "grouped expressions" {
+    const allocator = std.testing.allocator;
+
+    const tests = [_]struct {
+        program: []const u8,
+        expectedString: []const u8,
+    }{
+        .{ .program = "1 + (2 + 3) + 4;", .expectedString = "((1+(2+3))+4)\n" },
     };
 
     inline for (tests) |case| {
