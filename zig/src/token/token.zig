@@ -49,7 +49,7 @@ pub const TokenType = enum {
 
     pub fn string(tokenType: TokenType) []const u8 {
         switch (tokenType) {
-            .eof => return "",
+            .eof => return "eof",
             .assign => return "=",
             .plus => return "+",
             .minus => return "-",

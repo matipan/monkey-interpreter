@@ -80,6 +80,34 @@ pub const ReturnStatement = struct {
     }
 };
 
+pub const BlockStatement = struct {
+    token: Token,
+    statements: std.ArrayList(Statement),
+
+    pub fn literal(self: BlockStatement) []const u8 {
+        return self.token.literal;
+    }
+
+    pub fn string(self: BlockStatement, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        var str = std.ArrayList(u8).init(alloc);
+        defer str.deinit();
+
+        for (self.statements.items) |stmt| {
+            // we can defer the freeing of this memory block
+            // because we are copying it below
+            const value: []u8 = try stmt.string(alloc);
+            defer alloc.free(value);
+
+            try str.appendSlice(value);
+            try str.append('\n');
+        }
+
+        const result = try alloc.alloc(u8, str.items.len);
+        std.mem.copyForwards(u8, result, str.items);
+        return result;
+    }
+};
+
 pub const ExpressionStatement = struct {
     expression: Expression,
 
@@ -99,6 +127,7 @@ pub const Expression = union(enum) {
     boolean_literal: BooleanLiteral,
     prefix: PrefixExpression,
     infix: InfixExpression,
+    ifExpression: IfExpression,
 
     pub fn literal(self: Expression) []const u8 {
         switch (self) {
@@ -208,32 +237,69 @@ pub const InfixExpression = struct {
     }
 };
 
+pub const IfExpression = struct {
+    token: Token,
+    condition: *const Expression,
+    consequence: BlockStatement,
+    alternative: BlockStatement,
+
+    pub fn string(self: IfExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        var str = std.ArrayList(u8).init(alloc);
+        defer str.deinit();
+
+        try str.appendSlice("if (");
+        const cond = try self.condition.string(alloc);
+        defer alloc.free(cond);
+        try str.appendSlice(cond);
+        try str.appendSlice(") ");
+        if (self.consequence.statements.items.len == 0) {
+            try str.appendSlice("{}");
+        } else {
+            try str.appendSlice("{\n");
+            const cons = try self.consequence.string(alloc);
+            defer alloc.free(cons);
+            try str.appendSlice(cons);
+            try str.appendSlice("}");
+        }
+
+        if (self.alternative.statements.items.len == 0) {
+            try str.appendSlice(" else {}");
+        } else {
+            try str.appendSlice(" else {\n");
+            const cons = try self.consequence.string(alloc);
+            defer alloc.free(cons);
+            try str.appendSlice(cons);
+            try str.appendSlice("}");
+        }
+
+        const result = try alloc.alloc(u8, str.items.len);
+        std.mem.copyForwards(u8, result, str.items);
+
+        return result;
+    }
+};
+
 pub const Program = struct {
     statements: std.ArrayList(Statement),
     expressions: std.ArrayList(*const Expression),
-    alloc: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
 
     pub fn init(alloc: std.mem.Allocator) Program {
         return Program{
             .statements = std.ArrayList(Statement).init(alloc),
             .expressions = std.ArrayList(*const Expression).init(alloc),
-            .alloc = alloc,
+            .arena = std.heap.ArenaAllocator.init(alloc),
         };
     }
 
     pub fn deinit(self: Program) void {
-        // destroy all expressions that were allocated
-        for (self.expressions.items) |exp| {
-            self.alloc.destroy(exp);
-        }
-
         self.expressions.deinit();
         self.statements.deinit();
+        self.arena.deinit();
     }
 
     // lets start by simply printing a string for each statement and appending
     // a new line at the end of each
-    //
     pub fn string(self: Program, alloc: std.mem.Allocator) ![]u8 {
         var prog = std.ArrayList(u8).init(alloc);
         defer prog.deinit();

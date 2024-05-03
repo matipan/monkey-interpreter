@@ -31,6 +31,9 @@ const ParseError = error{
     // Let errors
     MissingAssign,
     MissingIdentOrLiteral,
+
+    // If errors
+    MissingOpeningBrace,
 };
 
 const Parser = struct {
@@ -147,7 +150,7 @@ const Parser = struct {
 
         // skip until we find a semi colon so that the parsing is ready for
         // the next statement
-        while (self.current_token.tokenType != tokenType.semicolon) {
+        while (self.current_token.tokenType != tokenType.semicolon and self.current_token.tokenType != tokenType.eof) {
             self.nextToken();
         }
 
@@ -165,6 +168,7 @@ const Parser = struct {
             .boolTrue, .boolFalse => Parser.parseBooleanLiteral,
             .bang, .minus => Parser.parsePrefixExpression,
             .lparen => Parser.parseGroupedExpression,
+            .ifCond => Parser.parseIfExpression,
             else => ParseError.InternalError,
         };
     }
@@ -182,7 +186,7 @@ const Parser = struct {
 
         // we exit when we find a semicolon or the precedence of the operator is
         // greater than the precedence of the next token
-        while (self.peek_token.tokenType != tokenType.semicolon and precedence < Operator.precedence(self.peek_token.tokenType)) {
+        while ((self.peek_token.tokenType != tokenType.semicolon and precedence < Operator.precedence(self.peek_token.tokenType)) or self.peek_token.tokenType == tokenType.eof) {
             // if we don't find any we need to return the left expression
             const infixFn = infixParseFn(self.peek_token.tokenType) catch {
                 // break of the loop to return leftExp below
@@ -203,6 +207,8 @@ const Parser = struct {
     // parseInfixExpression gets called once the `left` expression has already
     // been parsed
     fn parseInfixExpression(self: *Parser, program: *ast.Program, left: ast.Expression) ParseError!ast.Expression {
+        const alloc = program.arena.allocator();
+
         const cur_token = self.current_token;
         const prec = Operator.precedence(cur_token.tokenType);
 
@@ -210,7 +216,9 @@ const Parser = struct {
         const right = try self.parseExpression(prec, program);
 
         // allocate a pointer for the right expression
-        const right_ptr = program.alloc.create(ast.Expression) catch |err| {
+        // progra
+
+        const right_ptr = alloc.create(ast.Expression) catch |err| {
             std.debug.print("could not allocate expression: {any}\n", .{err});
             return ParseError.InternalError;
         };
@@ -223,7 +231,7 @@ const Parser = struct {
         right_ptr.* = right;
 
         // allocate a pointer for the left expression
-        const left_ptr = program.alloc.create(ast.Expression) catch |err| {
+        const left_ptr = alloc.create(ast.Expression) catch |err| {
             std.debug.print("could not allocate expression: {any}\n", .{err});
             return ParseError.InternalError;
         };
@@ -259,7 +267,7 @@ const Parser = struct {
 
         const right = try self.parseExpression(@intFromEnum(Operator.prefix), program);
 
-        const right_ptr = program.alloc.create(ast.Expression) catch |err| {
+        const right_ptr = program.arena.allocator().create(ast.Expression) catch |err| {
             std.debug.print("could not allocate expression: {any}\n", .{err});
             return ParseError.InternalError;
         };
@@ -292,6 +300,80 @@ const Parser = struct {
         self.nextToken();
 
         return exp;
+    }
+
+    fn parseIfExpression(self: *Parser, program: *ast.Program) ParseError!ast.Expression {
+        const alloc = program.arena.allocator();
+
+        // when we get inside the parser has:
+        // - current_token = if
+        // - peek_token = lparen
+        // so we need to move over to lparen to parse the expression properly
+        const if_token = self.current_token;
+        self.nextToken();
+
+        const cond_exp = try self.parseExpression(@intFromEnum(Operator.lowest), program);
+
+        const cond_ptr = alloc.create(ast.Expression) catch |err| {
+            std.debug.print("could not allocate expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+
+        program.expressions.append(cond_ptr) catch |err| {
+            std.debug.print("could not append expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+
+        cond_ptr.* = cond_exp;
+
+        if (self.peek_token.tokenType != tokenType.lbrace) {
+            return ParseError.MissingOpeningBrace;
+        }
+
+        // move on so that current token is lbrace
+        self.nextToken();
+
+        var cond_stmt = ast.BlockStatement{
+            .token = if_token,
+            .statements = std.ArrayList(ast.Statement).init(alloc),
+        };
+        errdefer cond_stmt.statements.deinit();
+
+        if (self.peek_token.tokenType != tokenType.rbrace) {
+            self.nextToken();
+
+            while (self.current_token.tokenType != tokenType.rbrace) {
+                const stmt = switch (self.current_token.tokenType) {
+                    .let => try self.parseLetStatement(program),
+                    .returnWith => try self.parseReturnStatement(program),
+                    else => try self.parseExpressionStatement(program),
+                };
+
+                // skip semicolon so that parser is ready for next stmt or expression
+                self.nextToken();
+
+                // we only reach here once an actual statement has been initialized
+                cond_stmt.statements.append(stmt) catch |err| {
+                    std.debug.print("could not append statements: {any}\n", .{err});
+                    return ParseError.InternalError;
+                };
+            }
+        }
+
+        const empty_block = ast.BlockStatement{
+            .token = if_token,
+            .statements = std.ArrayList(ast.Statement).init(alloc),
+        };
+        errdefer empty_block.statements.deinit();
+
+        return ast.Expression{
+            .ifExpression = ast.IfExpression{
+                .token = if_token,
+                .condition = cond_ptr,
+                .consequence = cond_stmt,
+                .alternative = empty_block,
+            },
+        };
     }
 
     fn parseIdentifier(self: *Parser, _: *ast.Program) ParseError!ast.Expression {
@@ -562,6 +644,35 @@ test "grouped expressions" {
         expectedString: []const u8,
     }{
         .{ .program = "1 + (2 + 3) + 4;", .expectedString = "((1+(2+3))+4)\n" },
+    };
+
+    inline for (tests) |case| {
+        var p = Parser.init(Lexer.init(case.program));
+
+        const program = p.parseProgram(allocator) catch |err| {
+            std.debug.print("parseProgram failed with = {any}\n", .{err});
+            return err;
+        };
+        defer program.deinit();
+
+        const value = try program.string(allocator);
+        defer allocator.free(value);
+
+        testing.expect(std.mem.eql(u8, value, case.expectedString)) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ value, case.expectedString });
+            return err;
+        };
+    }
+}
+
+test "if expressions" {
+    const allocator = std.testing.allocator;
+
+    const tests = [_]struct {
+        program: []const u8,
+        expectedString: []const u8,
+    }{
+        .{ .program = "if (x > y) { return x; }", .expectedString = "if ((x>y)) {\nreturn x\n} else {}\n" },
     };
 
     inline for (tests) |case| {
