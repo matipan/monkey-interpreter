@@ -127,7 +127,8 @@ pub const Expression = union(enum) {
     boolean_literal: BooleanLiteral,
     prefix: PrefixExpression,
     infix: InfixExpression,
-    ifExpression: IfExpression,
+    if_expression: IfExpression,
+    function_literal: FunctionLiteral,
 
     pub fn literal(self: Expression) []const u8 {
         switch (self) {
@@ -145,6 +146,10 @@ pub const Expression = union(enum) {
 pub const EmptyExpression = struct {
     token: Token,
 
+    pub fn literal(self: EmptyExpression) []const u8 {
+        return self.token.literal;
+    }
+
     pub fn string(self: EmptyExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         const result = try alloc.alloc(u8, self.token.literal.len);
         std.mem.copyForwards(u8, result, self.token.literal);
@@ -154,6 +159,10 @@ pub const EmptyExpression = struct {
 
 pub const Identifier = struct {
     token: Token,
+
+    pub fn literal(self: Identifier) []const u8 {
+        return self.token.literal;
+    }
 
     pub fn string(self: Identifier, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         const result = try alloc.alloc(u8, self.token.literal.len);
@@ -188,6 +197,10 @@ pub const PrefixExpression = struct {
     operator: []const u8,
     right: *const Expression,
 
+    pub fn literal(self: PrefixExpression) []const u8 {
+        return self.token.literal;
+    }
+
     pub fn string(self: PrefixExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
         defer str.deinit();
@@ -212,6 +225,10 @@ pub const InfixExpression = struct {
     operator: []const u8,
     left: *const Expression,
     right: *const Expression,
+
+    pub fn literal(self: InfixExpression) []const u8 {
+        return self.token.literal;
+    }
 
     pub fn string(self: InfixExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
@@ -243,6 +260,10 @@ pub const IfExpression = struct {
     consequence: BlockStatement,
     alternative: BlockStatement,
 
+    pub fn literal(self: IfExpression) []const u8 {
+        return self.token.literal;
+    }
+
     pub fn string(self: IfExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
         defer str.deinit();
@@ -266,7 +287,7 @@ pub const IfExpression = struct {
             try str.appendSlice(" else {}");
         } else {
             try str.appendSlice(" else {\n");
-            const cons = try self.consequence.string(alloc);
+            const cons = try self.alternative.string(alloc);
             defer alloc.free(cons);
             try str.appendSlice(cons);
             try str.appendSlice("}");
@@ -275,6 +296,46 @@ pub const IfExpression = struct {
         const result = try alloc.alloc(u8, str.items.len);
         std.mem.copyForwards(u8, result, str.items);
 
+        return result;
+    }
+};
+
+pub const FunctionLiteral = struct {
+    token: Token,
+    parameters: std.ArrayList(Identifier),
+    block: BlockStatement,
+
+    pub fn literal(self: FunctionLiteral) []const u8 {
+        return self.token.literal;
+    }
+
+    pub fn string(self: FunctionLiteral, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        var str = std.ArrayList(u8).init(alloc);
+        defer str.deinit();
+
+        try str.appendSlice("fn (");
+        for (self.parameters.items, 0..) |param, i| {
+            // we can defer the freeing of this memory block
+            // because we are copying it below
+            const value: []u8 = try param.string(alloc);
+            defer alloc.free(value);
+
+            try str.appendSlice(value);
+            if (i < self.parameters.items.len - 1) {
+                try str.append(',');
+            }
+        }
+        try str.appendSlice(") {");
+        if (self.block.statements.items.len > 0) {
+            try str.appendSlice("\n");
+            const block_stmts = try self.block.string(alloc);
+            defer alloc.free(block_stmts);
+            try str.appendSlice(block_stmts);
+        }
+        try str.appendSlice("}");
+
+        const result = try alloc.alloc(u8, str.items.len);
+        std.mem.copyForwards(u8, result, str.items);
         return result;
     }
 };

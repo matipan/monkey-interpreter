@@ -32,8 +32,14 @@ const ParseError = error{
     MissingAssign,
     MissingIdentOrLiteral,
 
-    // If errors
+    // Block statement errors
     MissingOpeningBrace,
+    MissingClosingBrace,
+
+    // fn errors
+    MissingOpeningParen,
+    MissingClosingParen,
+    InvalidFunctionParameters,
 };
 
 const Parser = struct {
@@ -169,6 +175,7 @@ const Parser = struct {
             .bang, .minus => Parser.parsePrefixExpression,
             .lparen => Parser.parseGroupedExpression,
             .ifCond => Parser.parseIfExpression,
+            .function => Parser.parseFunctionLiteral,
             else => ParseError.InternalError,
         };
     }
@@ -222,6 +229,7 @@ const Parser = struct {
             std.debug.print("could not allocate expression: {any}\n", .{err});
             return ParseError.InternalError;
         };
+        errdefer alloc.destroy(right_ptr);
 
         program.expressions.append(right_ptr) catch |err| {
             std.debug.print("could not append expression: {any}\n", .{err});
@@ -235,6 +243,7 @@ const Parser = struct {
             std.debug.print("could not allocate expression: {any}\n", .{err});
             return ParseError.InternalError;
         };
+        errdefer alloc.destroy(left_ptr);
 
         program.expressions.append(left_ptr) catch |err| {
             std.debug.print("could not append expression: {any}\n", .{err});
@@ -318,6 +327,7 @@ const Parser = struct {
             std.debug.print("could not allocate expression: {any}\n", .{err});
             return ParseError.InternalError;
         };
+        errdefer alloc.destroy(cond_ptr);
 
         program.expressions.append(cond_ptr) catch |err| {
             std.debug.print("could not append expression: {any}\n", .{err});
@@ -333,47 +343,153 @@ const Parser = struct {
         // move on so that current token is lbrace
         self.nextToken();
 
-        var cond_stmt = ast.BlockStatement{
-            .token = if_token,
-            .statements = std.ArrayList(ast.Statement).init(alloc),
-        };
-        errdefer cond_stmt.statements.deinit();
+        // exiting parseBlockStatement means the current_token will be the closign
+        // brace of this conditional block
+        const cond_block = try self.parseBlockStatement(if_token, program);
 
-        if (self.peek_token.tokenType != tokenType.rbrace) {
-            self.nextToken();
-
-            while (self.current_token.tokenType != tokenType.rbrace) {
-                const stmt = switch (self.current_token.tokenType) {
-                    .let => try self.parseLetStatement(program),
-                    .returnWith => try self.parseReturnStatement(program),
-                    else => try self.parseExpressionStatement(program),
-                };
-
-                // skip semicolon so that parser is ready for next stmt or expression
-                self.nextToken();
-
-                // we only reach here once an actual statement has been initialized
-                cond_stmt.statements.append(stmt) catch |err| {
-                    std.debug.print("could not append statements: {any}\n", .{err});
-                    return ParseError.InternalError;
-                };
-            }
+        // if peek token is not `else` then we return the if expression with an
+        // empty block for the alternative
+        if (self.peek_token.tokenType != tokenType.elseCond) {
+            var empty_block = ast.BlockStatement{
+                .token = if_token,
+                .statements = std.ArrayList(ast.Statement).init(alloc),
+            };
+            errdefer empty_block.statements.deinit();
+            return ast.Expression{
+                .if_expression = ast.IfExpression{
+                    .token = if_token,
+                    .condition = cond_ptr,
+                    .consequence = cond_block,
+                    .alternative = empty_block,
+                },
+            };
         }
 
-        const empty_block = ast.BlockStatement{
-            .token = if_token,
-            .statements = std.ArrayList(ast.Statement).init(alloc),
-        };
-        errdefer empty_block.statements.deinit();
+        // get the else token to then parse the block of statements
+        self.nextToken();
+        const else_token = self.current_token;
+
+        // token that comes after the else should be an opening brace given
+        // that its a complete block statement, making sure this is the case
+        // is taken care of by parseBlockStatement
+        self.nextToken();
+        const else_block = try self.parseBlockStatement(else_token, program);
 
         return ast.Expression{
-            .ifExpression = ast.IfExpression{
+            .if_expression = ast.IfExpression{
                 .token = if_token,
                 .condition = cond_ptr,
-                .consequence = cond_stmt,
-                .alternative = empty_block,
+                .consequence = cond_block,
+                .alternative = else_block,
             },
         };
+    }
+
+    fn parseFunctionLiteral(self: *Parser, program: *ast.Program) ParseError!ast.Expression {
+        const alloc = program.arena.allocator();
+
+        if (self.peek_token.tokenType != tokenType.lparen) {
+            return ParseError.MissingOpeningParen;
+        }
+
+        const fn_token = self.current_token;
+        self.nextToken();
+
+        var fn_literal = ast.FunctionLiteral{
+            .token = fn_token,
+            .parameters = std.ArrayList(ast.Identifier).init(alloc),
+            .block = ast.BlockStatement{
+                .token = fn_token,
+                .statements = std.ArrayList(ast.Statement).init(alloc),
+            },
+        };
+
+        // we start with current token being lparen so we parse the list of parameters
+        if (self.peek_token.tokenType != tokenType.rparen) {
+            while (self.current_token.tokenType != tokenType.rparen) {
+                if (self.current_token.tokenType == tokenType.eof) {
+                    return ParseError.MissingClosingParen;
+                }
+
+                // move over so that current token can be interpreted as an identifier
+                self.nextToken();
+                // if the next token is not a comma and not an rparen then its invalid
+                if (self.peek_token.tokenType != tokenType.comma and self.peek_token.tokenType != tokenType.rparen) {
+                    return ParseError.InvalidFunctionParameters;
+                }
+
+                // parse the current identifier and append it to the list
+                const ident = try parseIdentifier(self, program);
+                fn_literal.parameters.append(ident.identifier) catch |err| {
+                    std.debug.print("could not append identifier to parameter list: {any}\n", .{err});
+                    return ParseError.InternalError;
+                };
+
+                // move over ignoring
+                self.nextToken();
+            }
+        } else {
+            self.nextToken();
+        }
+
+        // when we get here current token is ) so peek token should be opening brace
+        if (self.peek_token.tokenType != tokenType.lbrace) {
+            return ParseError.MissingOpeningBrace;
+        }
+        // we move next token to be opening brace so that we can then call
+        // parseBlockStatement
+        self.nextToken();
+
+        fn_literal.block = try self.parseBlockStatement(fn_token, program);
+
+        return ast.Expression{
+            .function_literal = fn_literal,
+        };
+    }
+
+    // parseBlockStatement assumes that the parser is ready to start parsing
+    // a block of statements, this means that the current token must be the
+    // opening brace. When this function exits the current token will be the
+    // closing right brace (tokenType.rbrace)
+    fn parseBlockStatement(self: *Parser, token: Token, program: *ast.Program) ParseError!ast.BlockStatement {
+        const alloc = program.arena.allocator();
+
+        if (self.current_token.tokenType != tokenType.lbrace) {
+            return ParseError.MissingOpeningBrace;
+        }
+
+        var block = ast.BlockStatement{
+            .token = token,
+            .statements = std.ArrayList(ast.Statement).init(alloc),
+        };
+        errdefer block.statements.deinit();
+
+        self.nextToken();
+
+        if (self.current_token.tokenType == tokenType.rbrace) {
+            return block;
+        }
+
+        while (self.current_token.tokenType != tokenType.rbrace) {
+            if (self.current_token.tokenType == tokenType.eof) {
+                return ParseError.MissingClosingBrace;
+            }
+
+            const stmt = switch (self.current_token.tokenType) {
+                .let => try self.parseLetStatement(program),
+                .returnWith => try self.parseReturnStatement(program),
+                else => try self.parseExpressionStatement(program),
+            };
+
+            self.nextToken();
+
+            block.statements.append(stmt) catch |err| {
+                std.debug.print("could not append statements: {any}\n", .{err});
+                return ParseError.InternalError;
+            };
+        }
+
+        return block;
     }
 
     fn parseIdentifier(self: *Parser, _: *ast.Program) ParseError!ast.Expression {
@@ -673,6 +789,10 @@ test "if expressions" {
         expectedString: []const u8,
     }{
         .{ .program = "if (x > y) { return x; }", .expectedString = "if ((x>y)) {\nreturn x\n} else {}\n" },
+        .{ .program = "if (x > y) { return x; } else {}", .expectedString = "if ((x>y)) {\nreturn x\n} else {}\n" },
+        .{ .program = "if (x > y) {} else { return (2+3); }", .expectedString = "if ((x>y)) {} else {\nreturn (2+3)\n}\n" },
+        .{ .program = "if (x > y) {} else {}", .expectedString = "if ((x>y)) {} else {}\n" },
+        .{ .program = "if (x > y) { let five = 5;\nreturn five; } else { let two = 2;\nreturn two; }", .expectedString = "if ((x>y)) {\nlet five = 5\nreturn five\n} else {\nlet two = 2\nreturn two\n}\n" },
     };
 
     inline for (tests) |case| {
@@ -686,6 +806,37 @@ test "if expressions" {
 
         const value = try program.string(allocator);
         defer allocator.free(value);
+
+        testing.expect(std.mem.eql(u8, value, case.expectedString)) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ value, case.expectedString });
+            return err;
+        };
+    }
+}
+
+test "function literals" {
+    const alloc = std.testing.allocator;
+
+    const tests = [_]struct {
+        program: []const u8,
+        expectedString: []const u8,
+    }{
+        .{ .program = "fn () {}", .expectedString = "fn () {}\n" },
+        .{ .program = "fn (one, two, three) {}", .expectedString = "fn (one,two,three) {}\n" },
+        .{ .program = "fn (one, two, three) {let five = 5;\nreturn five;}", .expectedString = "fn (one,two,three) {\nlet five = 5\nreturn five\n}\n" },
+    };
+
+    inline for (tests) |case| {
+        var p = Parser.init(Lexer.init(case.program));
+
+        const program = p.parseProgram(alloc) catch |err| {
+            std.debug.print("parseProgram failed with = {any}\n", .{err});
+            return err;
+        };
+        defer program.deinit();
+
+        const value = try program.string(alloc);
+        defer alloc.free(value);
 
         testing.expect(std.mem.eql(u8, value, case.expectedString)) catch |err| {
             std.debug.print("{s} != {s}\n", .{ value, case.expectedString });
