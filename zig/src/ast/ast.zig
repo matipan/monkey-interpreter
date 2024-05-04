@@ -129,6 +129,7 @@ pub const Expression = union(enum) {
     infix: InfixExpression,
     if_expression: IfExpression,
     function_literal: FunctionLiteral,
+    call_expression: CallExpression,
 
     pub fn literal(self: Expression) []const u8 {
         switch (self) {
@@ -146,10 +147,6 @@ pub const Expression = union(enum) {
 pub const EmptyExpression = struct {
     token: Token,
 
-    pub fn literal(self: EmptyExpression) []const u8 {
-        return self.token.literal;
-    }
-
     pub fn string(self: EmptyExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         const result = try alloc.alloc(u8, self.token.literal.len);
         std.mem.copyForwards(u8, result, self.token.literal);
@@ -159,10 +156,6 @@ pub const EmptyExpression = struct {
 
 pub const Identifier = struct {
     token: Token,
-
-    pub fn literal(self: Identifier) []const u8 {
-        return self.token.literal;
-    }
 
     pub fn string(self: Identifier, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         const result = try alloc.alloc(u8, self.token.literal.len);
@@ -197,10 +190,6 @@ pub const PrefixExpression = struct {
     operator: []const u8,
     right: *const Expression,
 
-    pub fn literal(self: PrefixExpression) []const u8 {
-        return self.token.literal;
-    }
-
     pub fn string(self: PrefixExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
         defer str.deinit();
@@ -225,10 +214,6 @@ pub const InfixExpression = struct {
     operator: []const u8,
     left: *const Expression,
     right: *const Expression,
-
-    pub fn literal(self: InfixExpression) []const u8 {
-        return self.token.literal;
-    }
 
     pub fn string(self: InfixExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
@@ -259,10 +244,6 @@ pub const IfExpression = struct {
     condition: *const Expression,
     consequence: BlockStatement,
     alternative: BlockStatement,
-
-    pub fn literal(self: IfExpression) []const u8 {
-        return self.token.literal;
-    }
 
     pub fn string(self: IfExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
@@ -305,10 +286,6 @@ pub const FunctionLiteral = struct {
     parameters: std.ArrayList(Identifier),
     block: BlockStatement,
 
-    pub fn literal(self: FunctionLiteral) []const u8 {
-        return self.token.literal;
-    }
-
     pub fn string(self: FunctionLiteral, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         var str = std.ArrayList(u8).init(alloc);
         defer str.deinit();
@@ -333,6 +310,39 @@ pub const FunctionLiteral = struct {
             try str.appendSlice(block_stmts);
         }
         try str.appendSlice("}");
+
+        const result = try alloc.alloc(u8, str.items.len);
+        std.mem.copyForwards(u8, result, str.items);
+        return result;
+    }
+};
+
+pub const CallExpression = struct {
+    token: Token,
+    function: *const Expression,
+    arguments: std.ArrayList(*const Expression),
+
+    pub fn string(self: CallExpression, alloc: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        var str = std.ArrayList(u8).init(alloc);
+        defer str.deinit();
+
+        const function = try self.function.string(alloc);
+        defer alloc.free(function);
+
+        try str.appendSlice(function);
+        try str.append('(');
+        for (self.arguments.items, 0..) |arg, i| {
+            // we can defer the freeing of this memory block
+            // because we are copying it below
+            const value: []u8 = try arg.string(alloc);
+            defer alloc.free(value);
+
+            try str.appendSlice(value);
+            if (i < self.arguments.items.len - 1) {
+                try str.append(',');
+            }
+        }
+        try str.append(')');
 
         const result = try alloc.alloc(u8, str.items.len);
         std.mem.copyForwards(u8, result, str.items);

@@ -20,6 +20,7 @@ const Operator = enum(u8) {
             .lt, .gt => @intFromEnum(Operator.lessgreater),
             .plus, .minus => @intFromEnum(Operator.sum),
             .slash, .asterisk => @intFromEnum(Operator.product),
+            .lparen => @intFromEnum(Operator.call),
             else => @intFromEnum(Operator.lowest),
         };
     }
@@ -183,6 +184,7 @@ const Parser = struct {
     fn infixParseFn(tokType: tokenType) ParseError!*const fn (*Parser, *ast.Program, ast.Expression) ParseError!ast.Expression {
         return switch (tokType) {
             .plus, .minus, .slash, .asterisk, .eq, .notEq, .lt, .gt => Parser.parseInfixExpression,
+            .lparen => Parser.parseCallExpression,
             else => ParseError.InternalError,
         };
     }
@@ -259,6 +261,50 @@ const Parser = struct {
                 .operator = tokenType.string(cur_token.tokenType),
                 .token = cur_token,
             },
+        };
+    }
+
+    fn parseCallExpression(self: *Parser, program: *ast.Program, left: ast.Expression) ParseError!ast.Expression {
+        const alloc = program.arena.allocator();
+
+        const function_ptr = alloc.create(ast.Expression) catch |err| {
+            std.debug.print("could not allocate expression: {any}\n", .{err});
+            return ParseError.InternalError;
+        };
+        function_ptr.* = left;
+        var call_exp = ast.CallExpression{
+            .token = self.current_token,
+            .function = function_ptr,
+            .arguments = std.ArrayList(*const ast.Expression).init(alloc),
+        };
+
+        // when we come in here the current token is lparen so we are ready to
+        // parse the arguments
+        while (self.current_token.tokenType != tokenType.rparen) {
+            if (self.current_token.tokenType == tokenType.eof) {
+                return ParseError.MissingClosingParen;
+            }
+
+            self.nextToken();
+
+            const arg = try self.parseExpression(@intFromEnum(Operator.lowest), program);
+            const arg_ptr = alloc.create(ast.Expression) catch |err| {
+                std.debug.print("could not allocate expression: {any}\n", .{err});
+                return ParseError.InternalError;
+            };
+            errdefer alloc.destroy(arg_ptr);
+            arg_ptr.* = arg;
+            call_exp.arguments.append(arg_ptr) catch |err| {
+                std.debug.print("could not append argument for call expression: {any}\n", .{err});
+                return ParseError.InternalError;
+            };
+
+            // move over ignoring the comma
+            self.nextToken();
+        }
+
+        return ast.Expression{
+            .call_expression = call_exp,
         };
     }
 
@@ -425,7 +471,7 @@ const Parser = struct {
                     return ParseError.InternalError;
                 };
 
-                // move over ignoring
+                // move over ignoring the comma
                 self.nextToken();
             }
         } else {
@@ -845,6 +891,37 @@ test "function literals" {
     }
 }
 
+test "call expressions" {
+    const alloc = std.testing.allocator;
+
+    const tests = [_]struct {
+        program: []const u8,
+        expectedString: []const u8,
+    }{
+        .{ .program = "fn (one) {let five = 5;\nreturn five;}(1)", .expectedString = "fn (one) {\nlet five = 5\nreturn five\n}(1)\n" },
+        .{ .program = "add(one, two, three);", .expectedString = "add(one,two,three)\n" },
+        .{ .program = "fn (one, two) { return one + two; }(1*4-3, 1*4-2)", .expectedString = "fn (one,two) {\nreturn (one+two)\n}(((1*4)-3),((1*4)-2))\n" },
+    };
+
+    inline for (tests) |case| {
+        var p = Parser.init(Lexer.init(case.program));
+
+        const program = p.parseProgram(alloc) catch |err| {
+            std.debug.print("parseProgram failed with = {any}\n", .{err});
+            return err;
+        };
+        defer program.deinit();
+
+        const value = try program.string(alloc);
+        defer alloc.free(value);
+
+        testing.expect(std.mem.eql(u8, value, case.expectedString)) catch |err| {
+            std.debug.print("{s} != {s}\n", .{ value, case.expectedString });
+            return err;
+        };
+    }
+}
+
 test "program printing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -855,7 +932,7 @@ test "program printing" {
         expectedString: []const u8,
     }{
         .{ .program = "let five = 5;", .expectedString = "let five = 5\n" },
-        .{ .program = "let five = add(x,y);", .expectedString = "let five = add\n" },
+        .{ .program = "let five = add(x,y);", .expectedString = "let five = add(x,y)\n" },
         .{ .program = "return five;", .expectedString = "return five\n" },
         .{ .program = "return 5;", .expectedString = "return 5\n" },
     };
