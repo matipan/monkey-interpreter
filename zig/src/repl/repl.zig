@@ -1,27 +1,30 @@
 const std = @import("std");
-const lexer = @import("../lexer/lexer.zig");
+const Parser = @import("../parser/parser.zig").Parser;
+const Lexer = @import("../lexer/lexer.zig").Lexer;
 const tokenType = @import("../token/index.zig").TokenType;
 
 pub fn run() !void {
-    const stdin = std.io.getStdIn().reader();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
 
+    const stdin = std.io.getStdIn().reader();
     while (true) {
         std.debug.print(">> ", .{});
 
         var buffer: [1024]u8 = undefined;
         const bytes = try stdin.readUntilDelimiterOrEof(buffer[0..], '\n');
 
-        var l: lexer.Lexer = undefined;
         if (bytes) |input| {
-            l = lexer.Lexer.init(input);
-            while (true) {
-                const t = l.nextToken();
-                if (t.tokenType == tokenType.eof) {
-                    break;
-                }
+            var p = Parser.init(Lexer.init(input));
 
-                std.debug.print("{any} - {s}\n", .{ t.tokenType, t.literal });
-            }
+            const program = try p.parseProgram(alloc);
+            defer program.deinit();
+
+            const value = try program.string(alloc);
+            defer alloc.free(value);
+
+            std.debug.print("{s}\n", .{value});
         } else {
             std.debug.print("No input received.\n", .{});
         }

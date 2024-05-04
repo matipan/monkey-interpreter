@@ -43,7 +43,7 @@ const ParseError = error{
     InvalidFunctionParameters,
 };
 
-const Parser = struct {
+pub const Parser = struct {
     lexer: Lexer,
 
     current_token: Token,
