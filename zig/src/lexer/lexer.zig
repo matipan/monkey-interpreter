@@ -1,4 +1,4 @@
-const token = @import("../token/index.zig");
+const token = @import("token");
 const std = @import("std");
 const dprint = std.debug.print;
 const testing = std.testing;

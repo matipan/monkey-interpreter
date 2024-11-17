@@ -20,8 +20,6 @@ pub fn EvalStatement(stmt: ast.Statement) void {
 }
 
 pub fn EvalExpression(exp: ast.Expression) void {
-    switch (exp) {
-        .integer_literal => 
-    }
+    switch (exp) {}
     return;
 }

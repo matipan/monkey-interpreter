@@ -37,7 +37,7 @@ pub const TokenType = enum {
     elseCond,
     returnWith,
 
-    const keywords = std.ComptimeStringMap(TokenType, .{
+    const keywords = std.StaticStringMap(TokenType).initComptime(.{
         .{ TokenType.function.string(), TokenType.function },
         .{ TokenType.let.string(), TokenType.let },
         .{ TokenType.boolTrue.string(), TokenType.boolTrue },

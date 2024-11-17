@@ -1,9 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
-const Lexer = @import("../lexer/lexer.zig").Lexer;
-const Token = @import("../token/index.zig").Token;
-const tokenType = @import("../token/index.zig").TokenType;
-const ast = @import("../ast/ast.zig");
+const Lexer = @import("lexer").Lexer;
+const Token = @import("token").Token;
+const tokenType = @import("token").TokenType;
+const ast = @import("ast");
 
 const Operator = enum(u8) {
     lowest,

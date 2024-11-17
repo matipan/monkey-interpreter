@@ -1,7 +1,7 @@
 const std = @import("std");
-const Parser = @import("../parser/parser.zig").Parser;
-const Lexer = @import("../lexer/lexer.zig").Lexer;
-const tokenType = @import("../token/index.zig").TokenType;
+const Parser = @import("parser").Parser;
+const Lexer = @import("lexer").Lexer;
+const tokenType = @import("token").TokenType;
 
 pub fn run() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
